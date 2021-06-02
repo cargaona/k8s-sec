@@ -71,7 +71,7 @@ En este caso, el role que creamos es local, por eso es un Role y no un ClusterRo
 Dentro de 'metadata' tenemos el nombre del Role, que nos va a servir luego para relacionarlo con el user, así como cuando nombrábamos los roles 'Mascota Confianzuda' o 'Mascota Malcríada'.
 
 Más abajo vemos las 'Rules'.
-Dentro de las reglas, tenemos 'apiGroups': Dentro de la ClusterAPI a qué grupos de endpoints podemos hacer pedidos. Más info sobre los API Groups existentes [acá](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.21/#-strong-api-groups-strong-). En este caso al dejarlas como "" estamos dando acceso a todos los API Groups.
+Dentro de las reglas, tenemos 'apiGroups': Dentro de la ApiServer a qué grupos de endpoints podemos hacer pedidos. Más info sobre los API Groups existentes [acá](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.21/#-strong-api-groups-strong-). En este caso al dejarlas como "" estamos dando acceso a todos los API Groups.
 
 También tenemos los 'resources'. En este caso le estamos indicando que este Role otorgará permisos a los recursos u objetos 'pod'.
 
@@ -158,7 +158,7 @@ Qué permisos tiene el default-serviceAccount?
 -
 
 
-## Cómo funciona el serviceAccount? Kubernetes ClusterAPI.
+## Cómo funciona el serviceAccount? Kubernetes ApiServer.
 
 Como vimos al principio, la manera de interactuar con Kubernetes es a través de su API y las aplicaciones no son la excepción. Podemos intentar hacer un request a la Kubernetes API para ver qué nos devuelve. 
 
@@ -169,7 +169,7 @@ kubectl apply -f https://k8s.io/examples/admin/dns/dnsutils.yaml
 
 Una vez _deployado_ el dns-utils podemos ejecutar el siguiente comando para ver qué nos devuelve la Kubernetes API.
 
-_Si te genera dudas cómo es que sólo "kubernetes" resuelve a la Cluster API, podés correr el siguiente comando y entender a dónde está resolviendo:_
+_Si te genera dudas cómo es que sólo "kubernetes" resuelve a la ApiServer, podés correr el siguiente comando y entender a dónde está resolviendo:_
 ```bash
 $ k exec -it dnsutils -- host kubernetes                                                                
 
@@ -193,7 +193,7 @@ Debería devolvernos algo así:
 }
 ```
 
-Parece que llegamos a la ClusterAPI sin problemas pero no tenemos permisos, por eso obtuvimos un 403. Ahora es donde entra en juego el #service-account-token.
+Parece que llegamos a la ApiServer sin problemas pero no tenemos permisos, por eso obtuvimos un 403. Ahora es donde entra en juego el #service-account-token.
 
 ## ServiceAccount-Token
 Podemos listar los ServiceAccounts que existen en nuestro default namespace y vamos a ver que sólo existe el default. 
@@ -226,7 +226,7 @@ eyJhbGciOiJSUzI1NiIsImtpZCI6Ing2dGJWczNOSnk5VFA0N2Y5b3cySE56YjM3OGZJcU1wR0YyTWZI
 
 Con este comando nos traemos el "secret-token". Si todo marcha bien podríamos volver a hacer el request que hicimos antes a la API pero esta vez debería ser exitoso.
 
-## ClusterAPI request 2. 
+## ApiServer request 2. 
 
 Guardamos el token obtenido anteriormente en una variable llamada TOKEN. 
 
@@ -520,7 +520,7 @@ Copiamos el token a la variable TOKEN.
 }
 ```
 
-Parece que esta vez tuvimos éxito. Ya vimos como crear un ServiceAccount y usar el token generado para utilizar la Kubernetes ClusterAPI. Pero hasta ahora estuvimos tomando ese token a mano y ejecutando requests por nosotros mismos. ¿Cómo obtienen estos permisos las aplicaciones? 
+Parece que esta vez tuvimos éxito. Ya vimos como crear un ServiceAccount y usar el token generado para utilizar la Kubernetes ApiServer. Pero hasta ahora estuvimos tomando ese token a mano y ejecutando requests por nosotros mismos. ¿Cómo obtienen estos permisos las aplicaciones? 
 
 
 ## Binding ServiceAccounts a Pods o Deployments.
@@ -611,7 +611,6 @@ Por otro lado, vale la pena aclarar que los secretos, como ya vimos, pueden ser 
 - Comentar herramientas como https://github.com/liggitt/audit2rbac
 - Posible kube-polp? 
 
-
 ## Conclusión
 ### Sobre ServiceAccounts
 - Se crea un default Service Account por cada Namespace.
@@ -623,10 +622,77 @@ Por otro lado, vale la pena aclarar que los secretos, como ya vimos, pueden ser 
 - Dejar el default Service Account tal como está. No agregarle permisos.
 - Crear un ServiceAccount por aplicación, otorgando mínimos privilegios. 
 
-# Networking
-Kubernetes permite la comunicación entre sus componentes _containerizados_. Existen varias implementaciones del modelo de Networking para Kubernetes, las más conocidas son Flannel o Calico. 
+# Securizar Componentes
+## Control Plane (Master Nodes)
+Cuando creamos un clúster de Kubernetes en un cloud provider como por ejemplo AWS por defecto nos va a indicar que los nodos 'master' van a estar públicos. ¿Qué quiere decir esto? Nuestros nodos van a estar en una red pública, con IPs públicas y cualquier persona que conozca la IP/DNS podría hacer requests contra ellos. Por supuesto que, para hacer uso de la ApiServer debemos estar autenticados y aquellos que no tengan credenciales/token no podrán hacer uso de ninguna función. 
 
-Como Kubernetes ofrece varias abstracciones para orquestar containers (pods, services, ingresses) cada una de ellas implica una manera de comunicarse con otra. 
+Ya vimos como podemos obtener un token desde adentro de un container. Pero veamos el siguiente ejemplo.
+
+Tenemos una aplicación desplegada en nuestro cluster. Esta aplicación tiene una vulnerabilidad y permite al atacante leer archivos del filesystem. Si puede leer el token, luego puede usarlo para hacer pedidos contra la ApiServer desde donde sea ya que es pública en internet. Tendrá los mismos permisos que tenga nuestra aplicación. 
+
+¿Como podemos evitar esto?
+
+Tenemos varias cosas para hacer. Lo primero hacer que nuestros nodos del Control Plane no sean públicos. De este modo sólo desde determinadas IPs que estén 'allowed' en algún firewall o conectados a través de una VPN algún usuario va a poder hacer uso de la ApiServer. 
+
+De este modo nuestro atacante, por más de que tenga el token no va a poder acceder a la ApiServer ya que está fuera de su alcance. 
+
+### ETCD
+ETCD es la base de datos donde se guardan las configuraciones y eventos de nuestro clúster de Kubernetes. ETCD no tiene por qué vivir directamente dentro de los master nodes. Si bien la mayoría de las distribuciones de Kubernetes provistas por cloud providers nos abstraen de la seguridad de ETCD, en caso de implementar nuestra propia instalación de Kubernetes debemos seguir los mismos pasos que tomamos con los master nodes.
+
+- Dejar ETCD detrás de un firewall donde sólo IPs conocidas puedan accedeer (probablemente sólo las de los master nodes).
+- Habilitar autenticación en ETCD. 
+- Habilitar encriptación de la data en la base de datos. Si alguien llega, que se encuentre con data que no puede leer.
+
+## Hosts
+Así como mencionamos posibles vulnerabilidades en nuestras aplicaciones que pueden permitir a potenciales atacantes leer tokens dentro del FileSystem, podemos encontrarnos con más casos. 
+
+Una de las posibilidades es que puedan escalar desde el container al host/nodo/worker por algún bug en el kernel o de kubernetes y puedan hacer cosas como:
+- Usar otros servicios que viven en otros pods del cluster (Fix con NetworkPolicies, más adelante)
+- Crear nuevos containers con aplicaciones dentro del host o correr procesos. O leer información sensible de containers que están actualmente corriendo, como secretos, contraseñas o configuraciones. 
+- Leer token del Kubelet (Kubernetes Agent instalado en cada nodo que permite registrar el nodo en la ApiServer) y potencialmente impersonarlo. De este modo podría conseguir más información sobre el clúster. 
+
+¿Qué medidas podemos tomar para evitar esto?
+- Correr las aplicaciones en los containers como non-root.
+
+```yaml
+spec:
+    securityContext:
+        runAsUser: 1000
+```
+- Read Only FileSystem
+De esta manera evitamos que archivos que se escriban archivos de sistema que no esperamos que sean modificados. 
+(Por ejemplo el reemplazo de algún binario que nuestra app utiliza por otro que ejecuta código malicioso.)
+
+```yaml
+spec:
+    securityContext:
+        readOnlyRootFilesystem: true
+```
+
+- Not allowing privilege escalation.
+```yaml
+spec: 
+    securityContext:
+        allowPrivilegeEscalation: false
+```
+
+¿Como forzar estas reglas para todos los pods que deployemos?
+Puede pasar que varios equipos o usuarios que usen el cluster para desplegar sus aplicaciones sigan las recomendaciones que mecionamos recién a través de 'AdmissionControllers'.
+
+##_imagen_flow_validation_mutation_
+
+## Tráfico entre Pods
+En uno de los temas anteriores, en el que un atacante lograba ejecutar código desde uno de nuestros containers o lograba acceso al host/nodo/worker, dijimos que era posible que tenga acceso a usar otros servicios que corren en el cluster, usualmente servicios HTTP.
+
+Para ver cómo podemos solucionar este problema vamos a meternos un poco más a fondo en cómo funciona el networking en Kubernetes.
+
+## Networking
+Kubernetes permite la comunicación entre sus componentes _containerizados_. Existen varias implementaciones del modelo de Networking para Kubernetes, las más conocidas son Flannel, Cillium o Calico. 
+
+Los cloud providers como AWS no ofrecen por defecto el _feature_ de 'NetworkPolicies' que mencionamos antes. Por lo que no tenemos una manera obvia de negar tráfico entre servicios dentro del clúster.  
+
+Como Kubernetes tiene varias abstracciones para orquestar containers (pods, services, ingresses) cada una de ellas implica una manera de comunicarse con otra. 
+
 
 ## Container a Container dentro de un Pod.
 Los containers en Kubernetes están agrupados en pods. Un pod puede contener más de un sólo container. La solución de Networking que hayamos elegido va a asignar una IP única en todo el clúster a ese pod. Los containers dentro de ese pod pueden comunicarse entre sí utilizando `localhost`. Dado que un Pod posee una única IP, todos los containers del mismo pod deben vivir en el mismo nodo del cluster. 
@@ -772,7 +838,264 @@ Llegamos bien a través de nuestro Service. Además, podemos llegar a él a trav
 / - Hello World! Host:hello-world-with-svc-7cd6d8dfc6-t4g9p/10.64.232.162/ # 
 ```
 
-##TODO:
 - Prueba a través de distintos namespaces. 
-- Implementar Calico para demostrar como impedir ese tráfico. 
-- Ingress. 
+##TODO
+
+El tráfico está bastante libre entre los pods. Cualquiera puede llegar a cualquier lado. Vamos a ver cómo podemos restringirlo.
+
+## Network Policies
+Probamos network policies usando Calico. Lo necesario para instalarlo está en `./networking/calico-install`. 
+
+Vamos a probar la demo de Calico que a través de una UI nos permite ver cómo se comunican los servicios. 
+
+ - En el namespace 'star' tenemos el frontend y el backend de la aplicación.
+ - En el namespace 'client' tenemos al cliente que va a querer usar la aplicación.
+ - En el namespace 'management-ui' tenemos la aplicación que vamos a utilizar para monitorear la accesibilidad entre los pods/servicios.
+
+Para empezar a ver esto en acción exponemos el service del 'management-ui' a nuestro localhost y vamos al navegador a ver qué tenemos.
+
+```bash
+» k port-forward service/management-ui -n management-ui 9001
+```
+
+Si ingresamos en http://localhost:9001 deberíamos ver lo siguiente:
+
+![image](./networking/network-policies-demo/images/stars-default.png)
+
+En el gráfico vemos B por Backend, F por Frontend y C por Client. Las líneas que conectan el grafo nos indican que todos los nodos se pueden ver entre sí. 
+
+Vamos a aplicar unas NetworkPolicies para lograr que las aplicaciones no se vean entre sí.  Pero antes vamos a revisarlas. `./networking/network-policies-demo/isolate-services/`   
+
+En client-deny.yaml tenemos lo siguiente: 
+
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  namespace: client
+  name: default-deny
+spec:
+  podSelector:
+    matchLabels: {}
+```
+
+Una NetworkPolicy vacía, por lo que nada va a poder llegar al Namespace `client`. 
+
+En stars-deny.yaml:
+
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: default-deny
+  namespace: stars
+spec:
+  podSelector:
+    matchLabels: {}
+```
+Otra NetworkPolicy vacía. 
+
+Aplicamos.
+
+```bash
+ » k apply -f isolate-services/ 
+```
+
+Y ahora al refrescar la pestaña del navegador deberíamos no ver nada, ya que perdimos acceso desde el namespace al que estamos accediendo 'management-ui' al resto al aplicar las políticas. 
+
+Como nosotros queremos ver qué está pasando entre los componentes, vamos aplicar una NetworkPolicy que nos permita volver a acceder a la UI como hicimos antes. `./networking/network-policies-demo/allow-ui-to-services`.
+
+Antes de aplicar veamos que tenemos. 
+
+allow-ui.yaml
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  namespace: stars
+  name: allow-ui
+spec:
+  podSelector:
+    matchLabels: {}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              role: management-ui
+```
+Con esta NetworkPolicy estamos permitiendo el ingreso a los recursos en el namespace 'stars' (frontend y backend) desde aquellos que estén en el namespace 'management-ui'. 
+
+Con este permiso ya podríamos ver desde la UI a dos de los servicios. Además ellos se ven entre sí.
+
+```bash
+» k apply -f allow-ui.yaml   
+```
+
+allow-ui-client.yaml
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  namespace: client 
+  name: allow-ui 
+spec:
+  podSelector:
+    matchLabels: {}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              role: management-ui 
+```
+Con esta NetworkPolicy estamos permitiendo el ingreso a los recursos en el namespace 'client' (client) desde aquellos que estén en el namespace 'management-ui'.
+
+Aplicamos.
+
+```bash
+» k apply -f allow-ui-client.yaml 
+```
+Ahora podríamos también ver al cliente desde nuestra UI.
+
+![image](./networking/network-policies-demo/images/stars-no-traffic.png)
+
+Como último paso vamos a dejar que nuestro Cliente vea al frontend, pero no al backend. Y que el frontend sí vea al backend. 
+
+Revisamos los archivos que están en `./networking/network-policies-demo/last-step/`
+
+backend-policy.yaml
+
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  namespace: stars
+  name: backend-policy
+spec:
+  podSelector:
+    matchLabels:
+      role: backend
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              role: frontend
+      ports:
+        - protocol: TCP
+          port: 6379
+```
+
+En esta NetworkPolicy habilitamos el tráfico desde los pods que tengan como label 'frontend' a los que tengan el label 'backend'. Adicionalmente, aclaramos que el tráfico que habilitamos es sólo al puerto 6379.
+
+frontend-policy.yaml
+
+```yaml
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  namespace: stars
+  name: frontend-policy
+spec:
+  podSelector:
+    matchLabels:
+      role: frontend 
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              role: client
+      ports:
+        - protocol: TCP
+          port: 80
+```
+
+Para la NetworkPolicy del frontend, en el namespace de 'stars', habilitamos el tráfico desde el namespace 'client'. Y en este caso permitimos el tráfico sólo al puerto 80, que es el puerto donde sirve nuestra aplicación de Frontend. 
+
+Aplicamos todo esto.
+
+```bash
+» k apply -f last-step/
+```
+
+Como resultado de esto tendríamos que ver que el cliente se ve con el frontend, pero no con el backend, y que sólo el frontend (y nuestra UI) pueden llegar al backend. 
+
+![image](./networking/network-policies-demo/images/stars-final.png)
+
+En resumen, las NetworkPolicies:
+- Nos dejan controlar tráfico entre Pods.
+- Nos dejan controlar tráfico entre Pods según su namespace.
+- Nos dejan controlar tráfico entre Pods/Services según su puerto.
+- Por defecto, una Policy vacía es un DenyAll. 
+- Por el momento, sólo podemos agregar AllowRules. 
+- No nos dejan auditar conecciones aceptadas o negadas.
+
+Más info sobre NetworkPolicies: https://kubernetes.io/docs/concepts/services-networking/network-policies/
+
+_Luego de terminar la demo, borrar todo_
+```bash
+» k delete -f install 
+```
+
+# Auditoría 
+_Para este apartado necesitamos activar 'Audit' en nuestro cluster, para eso tenemos que reiniciar minikube_
+
+```
+minikube stop
+
+mkdir -p ~/.minikube/files/etc/ssl/certs
+
+cat <<EOF > ~/.minikube/files/etc/ssl/certs/audit-policy.yaml
+# Log all requests at the Metadata level.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+- level: Metadata
+EOF
+
+minikube start \
+  --extra-config=apiserver.audit-policy-file=/etc/ssl/certs/audit-policy.yaml \
+  --extra-config=apiserver.audit-log-path=-
+```
+_Más info en: https://minikube.sigs.k8s.io/docs/tutorials/audit-policy/_
+
+Necesitamos logs!
+Podemos distinguir dos tipos de logs dentro de Kubernetes. Por un lado los logs generados por las aplicaciones desplegadas dentro del clúster, que típicamente envían logs por stdout y soluciones externas _scrappean_ esos logs y los llevan a otro lado para almacenarlos y eventualmente analizarlos.
+
+Nosotros nos vamos a enfocar no en logs de aplicaciones sino en logs de Kubernetes en sí mismo. 
+
+El caso que querríamos resolver es el siguiente: Tenemos un clúster, dentro de ese clúster hay un secreto en un namespace que tiene un valor determinado. De un momento para el otro el valor de ese secreto cambió. Eso nos rompe el funcionamiento de algunas aplicaciones, alguien en nuestro equipo se da cuenta, lo arregla y todo vuelve a la normalidad. Nosotros nos preguntamos... ¿Qué pasó con ese secreto?, ¿Quién cambió el valor del secreto?.
+
+Si empezamos a ver logs de los pods asociados a ese secreto lo único que vemos son errores, a lo sumo podemos determinar la hora a la que todo empezó a fallar, pero como no es responsabilidad de la aplicación desplegar el secreto, ella no sabe quién pudo haberlo cambiado. Los logs de aplicaciones no nos sirven para este caso.
+
+También podemos ejecutar 'events'. Si ejecutamos `kubectl get events` y buscamos un poco vamos a dar con información acerca de que el secreto fue modíficado. 
+
+Quien sí tiene la información que buscamos es nuestra ApiServer.
+https://www.youtube.com/watch?v=HXtLTxo30SY
+
+Filtramos un poco los logs del ApiServer: 
+
+```bash
+» kubectl logs kube-apiserver-minikube -n kube-system | grep pochoclo | jq .  
+{                                                                    
+  "kind": "Event",    
+  "apiVersion": "audit.k8s.io/v1",
+  "level": "Metadata",
+  "auditID": "c281c0da-f1c4-44ba-9419-91fb53041e82",
+  "stage": "ResponseComplete",
+  "requestURI": "/api/v1/namespaces/kube-system/pods/kube-apiserver-minikube",
+  "verb": "get",
+  "user": {
+    "username": "pochoclo",                                          
+    "groups": [                                                      
+      "group1",   
+      "system:authenticated"                                         
+    ]                                                                                                                                      
+  },
+  "sourceIPs": [
+    "192.168.49.1"                                                                                                                         
+  ],
+```
+
+- Como mandar los logs a otro lado - Mención a feature alpha.
+- Mención a como activar audit logs
+- Mención especial a ebpf.
+
