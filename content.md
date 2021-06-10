@@ -1,6 +1,6 @@
 # RBAC
 RBAC es un acrónimo para "Role Based Access Control". Kubernetes implementa esta forma de conceder accesos a usuarios y aplicaciones. 
-Podríamos decir que RBAC concede accesos luego de contestar la siguiente pregunta: ¿Puede tal persona ejecutar tal acción sobre de terminado objeto?. De esto inferimos 3 partes necesarias. Un sujeto (Tranquilos, no es análisis sintáctico esto.). Una acción (Les juro que esto no es un predicado verbal simple). Y un objeto (No, no es un objeto directo. Tampoco hay voz pasiva o activa aunque parezca.)
+Podríamos decir que RBAC concede accesos luego de contestar la siguiente pregunta: ¿Puede tal persona ejecutar tal acción sobre de terminado objeto?. De esto inferimos 3 partes necesarias. Un sujeto, una acción, y un objeto. 
 
 Veamoslo del siguiente modo: 
 Yo tengo un gato que se llama Pochoclo. Él va a ser mi sujeto a quien voy a darle permisos.
