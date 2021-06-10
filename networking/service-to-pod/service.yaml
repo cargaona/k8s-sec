@@ -1,12 +1,12 @@
 kind: Service
 apiVersion: v1
 metadata:
-  name: hello-world-svc
+  name: whoami
 spec:
   selector:
-    app: hello-world
+    app: whoami 
   ports:
   - port: 80
-    targetPort: 5050
+    targetPort: 80
   
 

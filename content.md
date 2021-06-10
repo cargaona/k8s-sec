@@ -98,7 +98,7 @@ roleRef:
 ```
 
 Este objeto, 'RoleBinding', nos sirve para relacionar Roles o ClusterRoles de manera Local. Es decir, sólo en un namespace. 
-Dentro de 'Subjects' tenemos 'Kind'. Lo que va allí responde a la pregunta ¿A qué cosa querés relacionarle este rol?. Y las posibles respuestas son Group, User o ServiceAccount. #TODO link a docu.
+Dentro de 'Subjects' tenemos 'Kind'. Lo que va allí responde a la pregunta ¿A qué cosa querés relacionarle este rol?. Y las posibles respuestas son Group, User o ServiceAccount. [documentación](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#rolebinding-example).
 También está 'name', que es el nombre del 'Kind' elegido. En nuestro caso es 'pochoclo' porque ese ese el nombre de usuario.
 Más abajo tenemos 'RoleRef' donde ponemos la información del Role que vamos a relacionar, en nuestro caso, al usuario Pochoclo. Completamos con los datos correspondientes y estamos en condiciones de aplicar. 
 
@@ -139,7 +139,24 @@ Como es un Role local, por lo tanto asumido localmente, no podíamos listar pods
 Error from server (Forbidden): pods is forbidden: User "pochoclo" cannot list resource "pods" in API group "" in the namespace "kube-system"
 ```
 
-#TODO escribir global-local y global-global.
+También podemos revisar qué permisos tenemos
+
+```bash
+» k auth can-i --list
+```
+Apliquemos los permisos que están en global-global y repetimos la prueba. Esta vez además deberíamos ver los pods de todos los namespaces.
+
+```bash
+» k get pods -n kube-system
+NAME                               READY   STATUS    RESTARTS   AGE
+coredns-74ff55c5b-zgst7            1/1     Running   6          16d
+etcd-minikube                      1/1     Running   6          16d
+kube-apiserver-minikube            1/1     Running   3          10d
+kube-controller-manager-minikube   1/1     Running   6          16d
+kube-proxy-jrw8k                   1/1     Running   6          16d
+kube-scheduler-minikube            0/1     Running   6          16d
+storage-provisioner                1/1     Running   18         16d
+```
 
 ## ServiceAccount
 Los objetos ServiceAccount son últiles para cuando queremos dar acceso a aplicaciones. 
@@ -151,12 +168,6 @@ Hay varios ejemplos de aplicaciones de "Infraestructura" que pueden querer tener
 
 ## Default ServiceAccount
 Por defecto, cualquier cosa que deployemos dentro del cluster va a usar un ServiceAccount por defecto a menos que le indiquemos lo contrario. Este Service Account tiene permisos acotados. Se recomienda generar un ServiceAccount por cada aplicación o grupo de aplicaciones para poder auditar de una manera más sencilla qué aplicación está usando qué recurso y también para poder aplicar el principio de mínimos privilegios. 
-
-Qué permisos tiene el default-serviceAccount?
-
-- 
--
-
 
 ## Cómo funciona el serviceAccount? Kubernetes ApiServer.
 
@@ -256,7 +267,7 @@ Parece que ahora tuvimos éxito.
 ```
 Nos encontramos con una de las limitaciones del default ServiceAccount. Generemos uno con los permisos necesarios y veamos si podemos listar los pods.
 
-## Generando un ServiceAccount y _Bindeandolo_ con un Role. 
+## Generando un ServiceAccount y _relacionandolo_ con un Role. 
 
 Podemos dar una mirada a los archivos que están en ./service-account/service-account-binding.
 ```bash
@@ -523,8 +534,8 @@ Copiamos el token a la variable TOKEN.
 Parece que esta vez tuvimos éxito. Ya vimos como crear un ServiceAccount y usar el token generado para utilizar la Kubernetes ApiServer. Pero hasta ahora estuvimos tomando ese token a mano y ejecutando requests por nosotros mismos. ¿Cómo obtienen estos permisos las aplicaciones? 
 
 
-## Binding ServiceAccounts a Pods o Deployments.
-Vamos a _bindear_ nuestro Service Account creado anteriormente "demo-service-account" a un nuevo deployment de dns-utils. 
+## Relacionando ServiceAccounts a Pods o Deployments.
+Vamos a _relacionar_ nuestro Service Account creado anteriormente "demo-service-account" a un nuevo deployment de dns-utils. 
 El yaml está en ./dns-utils/deployment.yaml. Podemos ver que dentro de _Specs_ tenemos un campo de ServiceAccountName. Ahí es donde debemos introducir el nombre del ServiceAccount a relacionar y a partir de ahí nuestro deployment tendrá los permisos asignados a ese ServiceAccount.
 
 Todo perfecto hasta acá... ¿Pero cómo es utilizado el token dentro del container? Revisemos un poco.
@@ -607,10 +618,6 @@ Ahora entendimos cómo una aplicación puede acceder al token. El comportamiento
 
 Por otro lado, vale la pena aclarar que los secretos, como ya vimos, pueden ser montados en un path deseado, o también pueden ser pasados como variables de entorno en deployments u otros recursos. 
 
-## Auditar el uso de ServiceAccounts
-- Comentar herramientas como https://github.com/liggitt/audit2rbac
-- Posible kube-polp? 
-
 ## Conclusión
 ### Sobre ServiceAccounts
 - Se crea un default Service Account por cada Namespace.
@@ -622,6 +629,64 @@ Por otro lado, vale la pena aclarar que los secretos, como ya vimos, pueden ser 
 - Dejar el default Service Account tal como está. No agregarle permisos.
 - Crear un ServiceAccount por aplicación, otorgando mínimos privilegios. 
 
+# Auditoría 
+_Para este apartado necesitamos activar 'Audit' en nuestro cluster, para eso tenemos que reiniciar minikube_
+
+```
+minikube stop
+
+mkdir -p ~/.minikube/files/etc/ssl/certs
+
+cat <<EOF > ~/.minikube/files/etc/ssl/certs/audit-policy.yaml
+# Log all requests at the Metadata level.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+- level: Metadata
+EOF
+
+minikube start \
+  --extra-config=apiserver.audit-policy-file=/etc/ssl/certs/audit-policy.yaml \
+  --extra-config=apiserver.audit-log-path=-
+```
+_Más info en: https://minikube.sigs.k8s.io/docs/tutorials/audit-policy/_
+
+Podemos distinguir dos tipos de logs dentro de Kubernetes. Por un lado los logs generados por las aplicaciones desplegadas dentro del clúster, que típicamente envían logs por stdout y soluciones externas _scrappean_ esos logs y los llevan a otro lado para almacenarlos y eventualmente analizarlos.
+
+Nosotros nos vamos a enfocar no en logs de aplicaciones sino en logs de Kubernetes en sí mismo. 
+
+El caso que querríamos resolver es el siguiente: Tenemos un clúster, dentro de ese clúster hay un secreto en un namespace que tiene un valor determinado. De un momento para el otro el valor de ese secreto cambió. Eso nos rompe el funcionamiento de algunas aplicaciones, alguien en nuestro equipo se da cuenta, lo arregla y todo vuelve a la normalidad. Nosotros nos preguntamos... ¿Qué pasó con ese secreto?, ¿Quién cambió el valor del secreto?.
+
+Si empezamos a ver logs de los pods asociados a ese secreto lo único que vemos son errores, a lo sumo podemos determinar la hora a la que todo empezó a fallar, pero como no es responsabilidad de la aplicación desplegar el secreto, ella no sabe quién pudo haberlo cambiado. Los logs de aplicaciones no nos sirven para este caso.
+
+También podemos ejecutar 'events'. Si ejecutamos `kubectl get events` y buscamos un poco vamos a dar con información acerca de que el secreto fue modíficado. 
+
+Quien sí tiene la información que buscamos es nuestra ApiServer.
+https://www.youtube.com/watch?v=HXtLTxo30SY
+
+Filtramos un poco los logs del ApiServer: 
+
+```bash
+» kubectl logs kube-apiserver-minikube -n kube-system | grep pochoclo | jq .  
+{                                                                    
+  "kind": "Event",    
+  "apiVersion": "audit.k8s.io/v1",
+  "level": "Metadata",
+  "auditID": "c281c0da-f1c4-44ba-9419-91fb53041e82",
+  "stage": "ResponseComplete",
+  "requestURI": "/api/v1/namespaces/kube-system/pods/kube-apiserver-minikube",
+  "verb": "get",
+  "user": {
+    "username": "pochoclo",                                          
+    "groups": [                                                      
+      "group1",   
+      "system:authenticated"                                         
+    ]                                                                                                                                      
+  },
+  "sourceIPs": [
+    "192.168.49.1"                                                                                                                         
+  ],
+```
 # Securizar Componentes
 ## Control Plane (Master Nodes)
 Cuando creamos un clúster de Kubernetes en un cloud provider como por ejemplo AWS por defecto nos va a indicar que los nodos 'master' van a estar públicos. ¿Qué quiere decir esto? Nuestros nodos van a estar en una red pública, con IPs públicas y cualquier persona que conozca la IP/DNS podría hacer requests contra ellos. Por supuesto que, para hacer uso de la ApiServer debemos estar autenticados y aquellos que no tengan credenciales/token no podrán hacer uso de ninguna función. 
@@ -643,7 +708,7 @@ ETCD es la base de datos donde se guardan las configuraciones y eventos de nuest
 - Habilitar autenticación en ETCD. 
 - Habilitar encriptación de la data en la base de datos. Si alguien llega, que se encuentre con data que no puede leer.
 
-## Hosts
+## Containers
 Así como mencionamos posibles vulnerabilidades en nuestras aplicaciones que pueden permitir a potenciales atacantes leer tokens dentro del FileSystem, podemos encontrarnos con más casos. 
 
 Una de las posibilidades es que puedan escalar desde el container al host/nodo/worker por algún bug en el kernel o de kubernetes y puedan hacer cosas como:
@@ -692,7 +757,6 @@ Kubernetes permite la comunicación entre sus componentes _containerizados_. Exi
 Los cloud providers como AWS no ofrecen por defecto el _feature_ de 'NetworkPolicies' que mencionamos antes. Por lo que no tenemos una manera obvia de negar tráfico entre servicios dentro del clúster.  
 
 Como Kubernetes tiene varias abstracciones para orquestar containers (pods, services, ingresses) cada una de ellas implica una manera de comunicarse con otra. 
-
 
 ## Container a Container dentro de un Pod.
 Los containers en Kubernetes están agrupados en pods. Un pod puede contener más de un sólo container. La solución de Networking que hayamos elegido va a asignar una IP única en todo el clúster a ese pod. Los containers dentro de ese pod pueden comunicarse entre sí utilizando `localhost`. Dado que un Pod posee una única IP, todos los containers del mismo pod deben vivir en el mismo nodo del cluster. 
@@ -760,39 +824,38 @@ Esta vez vamos a crear dos objetos. Un Deployment (conjunto de Pods) y un Servic
 kind: Deployment
 apiVersion: apps/v1
 metadata:
-  name: hello-world-with-svc 
+  name: whoami 
   namespace: default
   labels:
-    app: hello-world
+    app: whoami 
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: hello-world
+      app: whoami 
   template:
     metadata:
       labels:
-        app: hello-world 
+        app: whoami 
         type: default
     spec:
       containers:
-      - image: vad1mo/hello-world-rest
-        name: hello-world
+      - image: containous/whoami 
+        name: whoami 
         ports:
         - name: http
-          containerPort: 5050
+          containerPort: 80
 ---
 kind: Service
 apiVersion: v1
 metadata:
-  name: hello-world-svc
+  name: whoami
 spec:
   selector:
-    app: hello-world
+    app: whoami 
   ports:
   - port: 80
-    targetPort: 5050
-  
+    targetPort: 80
 ```
 
 Veamos el Service que creamos.
@@ -800,46 +863,28 @@ Veamos el Service que creamos.
 ```bash
 » k get services
 NAME              TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
-hello-world-svc   ClusterIP   172.20.190.244   <none>        80/TCP    7m42s
+whoami            ClusterIP   172.20.5.166     <none>        80/TCP    3m39s
 ```
 
 Inspeccionemos un poco más.
 
 ```bash
 » k describe service hello-world-svc
-Name:              hello-world-svc
+Name:              whoami
 Namespace:         default
 Labels:            <none>
 Annotations:       <none>
-Selector:          app=hello-world
+Selector:          app=whoami
 Type:              ClusterIP
 IP Families:       <none>
-IP:                172.20.190.244
+IP:                172.20.5.166
 IPs:               <none>
 Port:              <unset>  80/TCP
-TargetPort:        5050/TCP
-Endpoints:         10.64.232.162:5050
+TargetPort:        80/TCP
+Endpoints:         10.64.232.135:80,10.64.232.136:80,10.64.232.176:80
 Session Affinity:  None
 Events:            <none>
 ```
-
-Por lo que vemos asignó una IP a nuestro Service y en el puerto 80 escucha. Podemos probar desde otro pod a ese Service a ver si llegamos.
-
-```bash
-» k exec -it pod/dnsutils -- sh
-/ # curl 172.20.190.244
-/ - Hello World! Host:hello-world-with-svc-7cd6d8dfc6-t4g9p/10.64.232.162/ #
-```
-
-Llegamos bien a través de nuestro Service. Además, podemos llegar a él a través de un DNS generado por Kubernetes.
-
-```bash
-# curl hello-world-svc.default.svc.cluster.local
-/ - Hello World! Host:hello-world-with-svc-7cd6d8dfc6-t4g9p/10.64.232.162/ # 
-```
-
-- Prueba a través de distintos namespaces. 
-##TODO
 
 El tráfico está bastante libre entre los pods. Cualquiera puede llegar a cualquier lado. Vamos a ver cómo podemos restringirlo.
 
@@ -1034,68 +1079,4 @@ _Luego de terminar la demo, borrar todo_
 ```bash
 » k delete -f install 
 ```
-
-# Auditoría 
-_Para este apartado necesitamos activar 'Audit' en nuestro cluster, para eso tenemos que reiniciar minikube_
-
-```
-minikube stop
-
-mkdir -p ~/.minikube/files/etc/ssl/certs
-
-cat <<EOF > ~/.minikube/files/etc/ssl/certs/audit-policy.yaml
-# Log all requests at the Metadata level.
-apiVersion: audit.k8s.io/v1
-kind: Policy
-rules:
-- level: Metadata
-EOF
-
-minikube start \
-  --extra-config=apiserver.audit-policy-file=/etc/ssl/certs/audit-policy.yaml \
-  --extra-config=apiserver.audit-log-path=-
-```
-_Más info en: https://minikube.sigs.k8s.io/docs/tutorials/audit-policy/_
-
-Necesitamos logs!
-Podemos distinguir dos tipos de logs dentro de Kubernetes. Por un lado los logs generados por las aplicaciones desplegadas dentro del clúster, que típicamente envían logs por stdout y soluciones externas _scrappean_ esos logs y los llevan a otro lado para almacenarlos y eventualmente analizarlos.
-
-Nosotros nos vamos a enfocar no en logs de aplicaciones sino en logs de Kubernetes en sí mismo. 
-
-El caso que querríamos resolver es el siguiente: Tenemos un clúster, dentro de ese clúster hay un secreto en un namespace que tiene un valor determinado. De un momento para el otro el valor de ese secreto cambió. Eso nos rompe el funcionamiento de algunas aplicaciones, alguien en nuestro equipo se da cuenta, lo arregla y todo vuelve a la normalidad. Nosotros nos preguntamos... ¿Qué pasó con ese secreto?, ¿Quién cambió el valor del secreto?.
-
-Si empezamos a ver logs de los pods asociados a ese secreto lo único que vemos son errores, a lo sumo podemos determinar la hora a la que todo empezó a fallar, pero como no es responsabilidad de la aplicación desplegar el secreto, ella no sabe quién pudo haberlo cambiado. Los logs de aplicaciones no nos sirven para este caso.
-
-También podemos ejecutar 'events'. Si ejecutamos `kubectl get events` y buscamos un poco vamos a dar con información acerca de que el secreto fue modíficado. 
-
-Quien sí tiene la información que buscamos es nuestra ApiServer.
-https://www.youtube.com/watch?v=HXtLTxo30SY
-
-Filtramos un poco los logs del ApiServer: 
-
-```bash
-» kubectl logs kube-apiserver-minikube -n kube-system | grep pochoclo | jq .  
-{                                                                    
-  "kind": "Event",    
-  "apiVersion": "audit.k8s.io/v1",
-  "level": "Metadata",
-  "auditID": "c281c0da-f1c4-44ba-9419-91fb53041e82",
-  "stage": "ResponseComplete",
-  "requestURI": "/api/v1/namespaces/kube-system/pods/kube-apiserver-minikube",
-  "verb": "get",
-  "user": {
-    "username": "pochoclo",                                          
-    "groups": [                                                      
-      "group1",   
-      "system:authenticated"                                         
-    ]                                                                                                                                      
-  },
-  "sourceIPs": [
-    "192.168.49.1"                                                                                                                         
-  ],
-```
-
-- Como mandar los logs a otro lado - Mención a feature alpha.
-- Mención a como activar audit logs
-- Mención especial a ebpf.
 
