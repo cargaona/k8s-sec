@@ -1,12 +1,11 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: curl-sa
+  name: curl
   namespace: utn
 spec:
-  serviceAccountName: demo-service-account
   containers:
-  - name: curl-sa
+  - name: curl
     image: curlimages/curl
     command:
       - sleep

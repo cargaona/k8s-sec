@@ -173,20 +173,20 @@ Por defecto, cualquier cosa que deployemos dentro del cluster va a usar un Servi
 
 Como vimos al principio, la manera de interactuar con Kubernetes es a través de su API y las aplicaciones no son la excepción. Podemos intentar hacer un request a la Kubernetes API para ver qué nos devuelve. 
 
-Para esta prueba vamos a utilizar una imagen de docker conocida como 'dns-utils' que nos permite troubleshootear problemas de DNS y Networking dentro de un cluster. Podés instalarla del siguiente modo:
+Para esta prueba vamos a utilizar una imagen de docker conocida como 'curl' que nos permite troubleshootear problemas de DNS y Networking dentro de un cluster. Podés instalarla del siguiente modo:
 ```bash
-kubectl apply -f https://k8s.io/examples/admin/dns/dnsutils.yaml
+kubectl apply -f ./rbac/service-account/service-account-binding/pod.yaml
 ```
 
 Una vez _deployado_ el dns-utils podemos ejecutar el siguiente comando para ver qué nos devuelve la Kubernetes API.
 
 _Si te genera dudas cómo es que sólo "kubernetes" resuelve a la ApiServer, podés correr el siguiente comando y entender a dónde está resolviendo:_
 ```bash
-$ k exec -it dnsutils -- host kubernetes                                                                
+$ k exec -it curl -- host kubernetes.default.svc                                                                
 
 kubernetes.default.svc.cluster.local has address 10.96.0.1
 ```bash
-k exec -it dnsutils -- curl https://kubernetes/api/v1 --insecure  | jq .
+k exec -it curl -- curl https://kubernetes.default.svc/api/v1 --insecure  | jq .
 ```
 
 Debería devolvernos algo así:
@@ -242,7 +242,7 @@ Con este comando nos traemos el "secret-token". Si todo marcha bien podríamos v
 Guardamos el token obtenido anteriormente en una variable llamada TOKEN. 
 
 ```bash
-k exec -it dnsutils -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1 --insecure
+k exec -it curl -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes.default.svc/api/v1 --insecure
 ```
 
 Parece que ahora tuvimos éxito. 
@@ -250,14 +250,14 @@ Parece que ahora tuvimos éxito.
 
 ¿Qué pasa si queremos ver qué pods hay? 
 ``` bash
-» k exec -it dnsutils -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/pods --insecure  | jq .     
+» k exec -it curl -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/pods --insecure  | jq .     
 
 {
   "kind": "Status",
   "apiVersion": "v1",
   "metadata": {},
   "status": "Failure",
-  "message": "pods is forbidden: User \"system:serviceaccount:default:default\" cannot list resource \"pods\" in API group \"\" at the cluster scope",
+  "message": "pods is forbidden: User \"system:serviceaccount:utn:default\" cannot list resource \"pods\" in API group \"\" at the cluster scope",
   "reason": "Forbidden",
   "details": {
     "kind": "pods"
@@ -301,7 +301,7 @@ eyJhbGciOiJSUzI1NiIsImtpZCI6Ing2dGJWczNOSnk5VFA0N2Y5b3cySE56YjM3OGZJcU1wR0YyTWZI
 Copiamos el token a la variable TOKEN.
 
 ```bash
- k exec -it dnsutils -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes/api/v1/namespaces/default/pods --insecure  | jq .
+k exec -it curl-sa -- curl -H "Authorization: Bearer $TOKEN" https://kubernetes.default.svc/api/v1/namespaces/utn/pods --insecure | jq .
 ```
 
 ```json
@@ -536,16 +536,16 @@ Parece que esta vez tuvimos éxito. Ya vimos como crear un ServiceAccount y usar
 
 ## Relacionando ServiceAccounts a Pods o Deployments.
 Vamos a _relacionar_ nuestro Service Account creado anteriormente "demo-service-account" a un nuevo deployment de dns-utils. 
-El yaml está en ./dns-utils/deployment.yaml. Podemos ver que dentro de _Specs_ tenemos un campo de ServiceAccountName. Ahí es donde debemos introducir el nombre del ServiceAccount a relacionar y a partir de ahí nuestro deployment tendrá los permisos asignados a ese ServiceAccount.
+El yaml está en ./rbac/service-account/service-account-binding/pod.yaml. Podemos ver que dentro de _Specs_ tenemos un campo de ServiceAccountName. Ahí es donde debemos introducir el nombre del ServiceAccount a relacionar y a partir de ahí nuestro deployment tendrá los permisos asignados a ese ServiceAccount.
 
 Todo perfecto hasta acá... ¿Pero cómo es utilizado el token dentro del container? Revisemos un poco.
 
 Veamos qué info tenemos acerca del pod.
 
 ```bash
-» k describe pods dnsutils-sa
+» k describe pods curl-sa
 
-Name:         dnsutils-sa
+Name:         curl-sa
 Namespace:    default
 Priority:     0
 Node:         minikube/192.168.49.2
@@ -603,7 +603,7 @@ Primero, "Mounts". Ahí vemos que hay un volumen del mismo nombre que el secreto
 Más abajo vemos que en "Volumes" efectivamente dice montar el secreto del nombre del ServiceAccount. Veamos dentro del container qué hay. 
 
 ```bash
-» k exec -it dnsutils-sa -- sh
+» k exec -it curl-sa -- sh
 # cd /var/run/secrets/kubernetes.io/serviceaccount
 # ls
 ca.crt     namespace  token
